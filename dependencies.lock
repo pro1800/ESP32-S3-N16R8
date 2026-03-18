@@ -1,0 +1,92 @@
+dependencies:
+  espp/base_component:
+    component_hash: b4a49711a633e14c3225a70ea01592629e19d2f8e3813efd7f10cff6fa346dd0
+    dependencies:
+    - name: espp/logger
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.0.35
+  espp/cli:
+    component_hash: f2e97c54a5258f445ad74017a3c766599ac7164b4464fce0d3966d6295e6dea9
+    dependencies:
+    - name: espp/logger
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.0.35
+  espp/format:
+    component_hash: ef925aec02e24c3466d6ccbae27a90d6fd80ef78ebcb91868b8a619d788bd38b
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.0.35
+  espp/logger:
+    component_hash: 7d4bcfde76b67ae86201b0eedf736674b549e1de14477f1bf41ab2b56e1456de
+    dependencies:
+    - name: espp/format
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.0.35
+  espp/wifi:
+    component_hash: 1fbfc66d90bef10263b397b85fd5264dcb91baab2139778666a7807b586c85e0
+    dependencies:
+    - name: espp/base_component
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: espp/cli
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.0.35
+  espressif/led_strip:
+    component_hash: 28621486f77229aaf81c71f5e15d6fbf36c2949cf11094e07090593e659e7639
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 3.0.3
+  idf:
+    source:
+      type: idf
+    version: 5.5.3
+direct_dependencies:
+- espp/wifi
+- espressif/led_strip
+- idf
+manifest_hash: 3b29fedc6dc82ebf2352612a0bf7c330f320ad152771c0e9cc31b9eb8303d4ed
+target: esp32s3
+version: 2.0.0
