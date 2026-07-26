@@ -38,7 +38,7 @@ sdkconfig.old
 
 # ESP-IDF 组件缓存
 **/components/.idf/
-#managed_components/
+managed_components/
 .espressif/
 
 # CMake 生成文件
