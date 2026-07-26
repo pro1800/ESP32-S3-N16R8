@@ -1,0 +1,205 @@
+#include "ontnet_mqtt.h"
+#include "onenet_token.h"
+#include "onenet_dm.h"
+#include "onenet_ota.h"
+#include "mqtt_client.h"
+#include "esp_log.h"
+#include "stdio.h"
+#include "stdint.h"
+#include "string.h"
+#include "stdlib.h"
+#include "cJSON.h"
+#include <stdbool.h>
+
+#define ONENET_TIMESTAMP 2074859482
+#define TAG "onenet"
+static esp_mqtt_client_handle_t s_onenet_client = NULL;
+static bool onenet_connected_flg = false;
+
+// 前向声明
+static void onenet_mqtt_event_handler(void* event_handler_arg,
+                                        esp_event_base_t event_base,
+                                        int32_t event_id,
+                                        void* event_data);
+
+esp_err_t onenet_start(void){
+    esp_mqtt_client_config_t mqtt_config;
+    memset(&mqtt_config,0,sizeof(esp_mqtt_client_config_t));
+    mqtt_config.broker.address.uri = "mqtt://mqtts.heclouds.com";
+    mqtt_config.broker.address.port = 1883;
+    mqtt_config.credentials.client_id = ONENET_DEVICE_NAME;
+    mqtt_config.credentials.username = ONENET_PRODUCT_ID;
+    static char token[256];
+    
+    dev_token_generate(token,SIG_METHOD_SHA256,ONENET_TIMESTAMP,ONENET_PRODUCT_ID,ONENET_DEVICE_NAME,ONEENT_PRODUCT_ACCESS_KEY);
+    mqtt_config.credentials.authentication.password = token;
+    s_onenet_client = esp_mqtt_client_init(&mqtt_config);
+    esp_mqtt_client_register_event(s_onenet_client,ESP_EVENT_ANY_ID,onenet_mqtt_event_handler,NULL);
+    return esp_mqtt_client_start(s_onenet_client);
+}
+
+/**
+ * 订阅相关主题，有要订阅的主题可以放在这个函数
+ * @param 无
+ * @return 错误
+ */
+esp_err_t onenet_subscribe(void)
+{
+    if (!onenet_connected_flg)
+        return ESP_FAIL;
+    char topic[128];
+    //订阅上报属性回复主题
+    snprintf(topic,sizeof(topic),"$sys/%s/%s/thing/property/post/reply",
+        ONENET_PRODUCT_ID,ONENET_DEVICE_NAME);
+    esp_mqtt_client_subscribe_single(s_onenet_client,topic,1);
+    //订阅下行设置属性主题
+    snprintf(topic,sizeof(topic),"$sys/%s/%s/thing/property/set",
+        ONENET_PRODUCT_ID,ONENET_DEVICE_NAME);
+    esp_mqtt_client_subscribe_single(s_onenet_client,topic,1);
+    //订阅OTA主题
+    snprintf(topic,sizeof(topic),"$sys/%s/%s/ota/inform",
+        ONENET_PRODUCT_ID,ONENET_DEVICE_NAME);
+    return esp_mqtt_client_subscribe_single(s_onenet_client,topic,1);
+}
+
+/**
+ * mqtt连接事件处理函数
+ * @param event 事件参数
+ * @return 无
+ */
+/**
+ * mqtt连接事件处理函数
+ * @param event 事件参数
+ * @return 无
+ */
+static void onenet_mqtt_event_handler(void* event_handler_arg,
+                                        esp_event_base_t event_base,
+                                        int32_t event_id,
+                                        void* event_data)
+{
+    esp_mqtt_event_handle_t event = event_data;
+    switch ((esp_mqtt_event_id_t)event_id) {
+        case MQTT_EVENT_CONNECTED:  //连接成功
+            ESP_LOGI(TAG, "Onenet mqtt connected");
+            onenet_connected_flg = true;
+
+            onenet_subscribe();
+            cJSON* property_js = onenet_property_upload_dm();
+            char* data = cJSON_PrintUnformatted(property_js);
+            onenet_post_property_data(data);
+            onenet_ota_upload_version();
+            cJSON_free(data);
+            cJSON_Delete(property_js);
+            set_app_valid(true);
+            break;
+        case MQTT_EVENT_DISCONNECTED:   //连接断开
+            ESP_LOGI(TAG, "Onenet mqtt disconnected");
+            onenet_connected_flg = false;
+            break;
+
+        case MQTT_EVENT_SUBSCRIBED:     //收到订阅消息ACK
+            ESP_LOGI(TAG, "Onenet mqtt subscribed ack, msg_id=%d", event->msg_id);
+            break;
+        case MQTT_EVENT_UNSUBSCRIBED:   //收到解订阅消息ACK
+
+            break;
+        case MQTT_EVENT_PUBLISHED:      //收到发布消息ACK
+            //ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
+            ESP_LOGI(TAG, "Onenet mqtt publish ack, msg_id=%d", event->msg_id);
+
+            break;
+        case MQTT_EVENT_DATA:
+            printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
+            printf("DATA=%.*s\r\n", event->data_len, event->data);
+            if(strstr(event->topic,"/property/set"))
+            {
+                cJSON *property_js = cJSON_Parse(event->data);
+                cJSON *id_js = cJSON_GetObjectItem(property_js,"id");
+
+                onenet_property_handle(property_js);
+                onenet_property_ack(cJSON_GetStringValue(id_js),200,"success");
+                cJSON_Delete(property_js);
+            }
+            else if(strstr(event->topic,"/ota/inform"))
+            {
+                cJSON *ota_js = cJSON_Parse(event->data);
+                cJSON *id_js = cJSON_GetObjectItem(ota_js,"id");
+                onenet_ota_ack(cJSON_GetStringValue(id_js),200,"success");
+                cJSON_Delete(ota_js);
+                onenet_ota_start();
+            }
+            break;
+        case MQTT_EVENT_ERROR:
+            ESP_LOGI(TAG, "MQTT_EVENT_ERROR");
+
+            break;
+        default:
+            break;
+    }
+}
+
+/**
+ * 上报数据
+ * @param data 数据
+ * @return 错误
+ */
+esp_err_t onenet_post_property_data(const char* data)
+{
+    if (!onenet_connected_flg)
+        return ESP_FAIL;
+    char topic[128];
+    snprintf(topic,sizeof(topic),"$sys/%s/%s/thing/property/post",
+        ONENET_PRODUCT_ID,ONENET_DEVICE_NAME);
+    ESP_LOGI(TAG,"Upload topic:%s,payload:%s",topic,data);
+    return esp_mqtt_client_publish(s_onenet_client,topic,data,strlen(data),1,0);
+}
+
+/**
+ * 属性设置响应
+ * @param id 设备ID
+ * @param code 返回码
+ * @param message 返回信息
+ * @return 无
+ */
+void onenet_property_ack(const char* id,int code,const char* message)
+{
+    if (!onenet_connected_flg)
+        return;
+    
+    cJSON* response = cJSON_CreateObject();
+    cJSON_AddStringToObject(response, "id", id);
+    cJSON_AddNumberToObject(response, "code", code);
+    cJSON_AddStringToObject(response, "msg", message);
+    
+    char* data = cJSON_PrintUnformatted(response);
+    
+    char topic[128];
+    snprintf(topic,sizeof(topic),"$sys/%s/%s/thing/property/set_reply",
+        ONENET_PRODUCT_ID,ONENET_DEVICE_NAME);
+    
+    esp_mqtt_client_publish(s_onenet_client,topic,data,strlen(data),1,0);
+    free(data);
+    cJSON_Delete(response);
+}
+
+
+/**
+ * 返回OTA确认
+ * @param code 错误码
+ * @param message 信息
+ * @return mqtt连接参数
+ */
+void onenet_ota_ack(const char* id,int code,const char* message)
+{
+    char topic[128];
+    snprintf(topic,sizeof(topic),"$sys/%s/%s/ota/inform_reply",ONENET_PRODUCT_ID,ONENET_DEVICE_NAME);
+
+    cJSON *reply_js = cJSON_CreateObject();
+    cJSON_AddStringToObject(reply_js,"id",id);
+    cJSON_AddNumberToObject(reply_js,"code",code);
+    cJSON_AddStringToObject(reply_js,"message",message);
+    char* data = cJSON_PrintUnformatted(reply_js);
+    esp_mqtt_client_publish(s_onenet_client,topic,data,strlen(data),1,0); 
+    cJSON_free(data);
+    cJSON_Delete(reply_js);
+}

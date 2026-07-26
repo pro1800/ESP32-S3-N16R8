@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "nvs.h"
@@ -8,81 +9,176 @@
 #include "My_WS2812.h"
 #include "WIFI_Manager.h"
 #include "ap_wifi.h"
+#include "onenet_token.h"
+#include "ontnet_mqtt.h"
+#include "onenet_dm.h"
+#include "onenet_ota.h"
+#include "esp_err.h" 
+#include "esp_wifi.h" 
+#include <stdint.h>  
 
 #define TAG "main"
+#define WIFI_CONNECT_BIT (1 << 0) // WIFI连接成功事件
+#define EV_WIFI_CONNECTED_BIT (1 << 0)  // WIFI连接成功事件
+#define DEFAULT_SSID "win_666"
+#define DEFAULT_PASSWORD "xxjs99999."
 
+static EventGroupHandle_t s_wifi_ev = NULL; // WIFI事件标志位
 
+// OTA启动任务 - 在 MQTT 连接后检查 OTA
+static void ota_start_task(void *param)
+{
+    // 等待 MQTT 连接完成后再检查 OTA
+    // MQTT 连接通常需要 5-10 秒
+    ESP_LOGI(TAG, "OTA check task started, waiting for network stability...");
+    vTaskDelay(pdMS_TO_TICKS(20000));  // 等待 20 秒确保网络完全就绪
+    
+    ESP_LOGI(TAG, "Checking for OTA updates");
+    onenet_ota_start();
+    vTaskDelete(NULL);
+}
 // WIFI状态回调函数
-static void wifi_stat_callback(WIFI_STATE state) {
-    if (state == WIFI_STATE_CONNECTED) {
-        ESP_LOGI(TAG, "WIFI connected");
+static void wifi_callback(WIFI_STATE state){    
+    if (state == WIFI_STATE_CONNECTED){
+        xEventGroupSetBits(s_wifi_ev, EV_WIFI_CONNECTED_BIT);   // 设置WIFI连接成功事件
+    }else if (state == WIFI_STATE_DISCONNECTED){
+        xEventGroupClearBits(s_wifi_ev, EV_WIFI_CONNECTED_BIT);  // 清除WIFI连接成功事件
     }
-    if (state == WIFI_STATE_DISCONNECTED) {
-        ESP_LOGI(TAG, "WIFI disconnected");
+}
+
+void app_main(void) 
+{
+    //nvs初始化
+    nvs_flash_init();
+    //onenet物模型数据初始化
+    onenet_dm_init();
+    s_wifi_ev = xEventGroupCreate();    //创建事件标志位
+    wifi_manager_init(wifi_callback);   //初始化WIFI管理器并注册回调函数
+    wifi_manager_connect(DEFAULT_SSID,DEFAULT_PASSWORD);    //连接WIFI
+    
+    // 创建OTA启动任务（上电后10秒自动检测）
+    xTaskCreatePinnedToCore(ota_start_task, "ota_start_task", 2048, NULL, 5, NULL, 1);
+    
+    while(1)
+    {
+        //这里等待一个WIFI连接成功的事件，然后再启动onenet连接
+        EventBits_t bits = xEventGroupWaitBits(s_wifi_ev,EV_WIFI_CONNECTED_BIT,pdTRUE,pdFALSE,pdMS_TO_TICKS(5000));
+        if(bits&EV_WIFI_CONNECTED_BIT)
+        {
+            onenet_start();
+        }
     }
 }
 
-// ============= GPIO0 按键回调函数（供 button 模块调用）=============
 
-// GPIO0短按回调函数 - 启动呼吸灯
-void button_gpio0_short_press_callback(int gpio) {
-    ESP_LOGI(TAG, "GPIO0 短按，启动呼吸灯");
-    
-    // 初始化WS2812
-    My_WS2812_Init();
-    
-    // 启动呼吸灯
-    My_WS2812_StartBreathing();
+/*
+// -------------------------------------------------------------
+//2026-03-19 Gavin 【MQTT连接ONENET平台】
+
+static EventGroupHandle_t wifi_ev = NULL;
+static void wifi_state_callback(WIFI_STATE state){
+    if (state == WIFI_STATE_CONNECTED){
+        xEventGroupSetBits(wifi_ev,WIFI_CONNECT_BIT);
+    }
 }
 
-// GPIO0释放回调函数 - 停止呼吸灯
-void button_gpio0_release_callback(int gpio) {
-    ESP_LOGI(TAG, "GPIO0 释放，停止呼吸灯");
-    
-    // 停止呼吸灯
-    My_WS2812_StopBreathing();
-}
-
-// GPIO0长按回调函数 (3秒后执行) - 启动AP配网模式
-void button_gpio0_long_press_callback(int gpio) {
-    ESP_LOGI(TAG, "GPIO0 长按超过3秒，初始化WIFI并启动AP配网模式");
-    
-    // 停止呼吸灯
-    My_WS2812_StopBreathing();
-    
-    // 关闭LED
-    My_WS2812_Init();
-    My_WS2812_Light(0, 0, 0);
-    
+void app_main(void){
     // 初始化NVS
     nvs_flash_init();
-    
-    // 初始化AP WIFI功能并启动配网
-    ap_wifi_init(wifi_stat_callback);
-    wifi_manager_ap();
-    ap_wifi_apcfg();  // 进入AP配网模式，启动websocket服务器
-}
-
-void app_main(void) {
-    // 初始化NVS
-    nvs_flash_init();
-    
-    // 初始化GPIO0
-    button_gpio0_init();
-    
-    // 注册GPIO0按键事件
-    button_gpio0_register();
-    
-    ESP_LOGI(TAG, "应用启动完成，等待按键操作...");
-    ESP_LOGI(TAG, "短按GPIO0: 启动呼吸灯");
-    ESP_LOGI(TAG, "长按GPIO0 3秒: 启动AP配网模式");
-    
-    // 主循环
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
+    wifi_ev = xEventGroupCreate();
+    wifi_manager_init(wifi_state_callback);
+    wifi_manager_connect("win_666","xxjs99999.");
+    EventBits_t ev;
+    while (1)
+    {
+        ev = xEventGroupWaitBits(wifi_ev,WIFI_CONNECT_BIT,pdTRUE,pdFALSE,pdMS_TO_TICKS(10*1000));
+        if(ev & WIFI_CONNECT_BIT){
+            onenet_start();
+        }
     }
+    
 }
+// -------------------------------------------------------------
+*/
 
+
+/*
+// -------------------------------------------------------------
+//2026-03-19 Gavin 【服务器数据交互】
+
+// // WIFI状态回调函数
+// static void wifi_stat_callback(WIFI_STATE state) {
+//     if (state == WIFI_STATE_CONNECTED) {
+//         ESP_LOGI(TAG, "WIFI connected");
+//     }
+//     if (state == WIFI_STATE_DISCONNECTED) {
+//         ESP_LOGI(TAG, "WIFI disconnected");
+//     }
+// }
+
+// // ============= GPIO0 按键回调函数（供 button 模块调用）=============
+
+// // GPIO0短按回调函数 - 启动呼吸灯
+// void button_gpio0_short_press_callback(int gpio) {
+//     ESP_LOGI(TAG, "GPIO0 短按，启动呼吸灯");
+    
+//     // 初始化WS2812
+//     My_WS2812_Init();
+    
+//     // 启动呼吸灯
+//     My_WS2812_StartBreathing();
+// }
+
+// // GPIO0释放回调函数 - 停止呼吸灯
+// void button_gpio0_release_callback(int gpio) {
+//     ESP_LOGI(TAG, "GPIO0 释放，停止呼吸灯");
+    
+//     // 停止呼吸灯
+//     My_WS2812_StopBreathing();
+// }
+
+// // GPIO0长按回调函数 (3秒后执行) - 启动AP配网模式
+// void button_gpio0_long_press_callback(int gpio) {
+//     ESP_LOGI(TAG, "GPIO0 长按超过3秒，初始化WIFI并启动AP配网模式");
+    
+//     // 停止呼吸灯
+//     My_WS2812_StopBreathing();
+    
+//     // 关闭LED
+//     My_WS2812_Init();
+//     My_WS2812_Light(0, 0, 0);
+    
+//     // 初始化NVS
+//     nvs_flash_init();
+    
+//     // 初始化AP WIFI功能并启动配网
+//     ap_wifi_init(wifi_stat_callback);
+//     wifi_manager_ap();
+//     ap_wifi_apcfg();  // 进入AP配网模式，启动websocket服务器
+// }
+
+// void app_main(void) {
+//     // 初始化NVS
+//     nvs_flash_init();
+    
+//     // 初始化GPIO0
+//     button_gpio0_init();
+    
+//     // 注册GPIO0按键事件
+//     button_gpio0_register();
+    
+//     ESP_LOGI(TAG, "应用启动完成，等待按键操作...");
+//     ESP_LOGI(TAG, "短按GPIO0: 启动呼吸灯");
+//     ESP_LOGI(TAG, "长按GPIO0 3秒: 启动AP配网模式");
+    
+//     // 主循环
+//     while (1) {
+//         vTaskDelay(pdMS_TO_TICKS(1000));
+//     }
+// }
+
+// -------------------------------------------------------------
+*/
 
 /*
 // -------------------------------------------------------------
