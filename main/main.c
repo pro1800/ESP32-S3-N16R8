@@ -25,7 +25,7 @@
 
 static EventGroupHandle_t s_wifi_ev = NULL; // WIFI事件标志位
 
-// 2026/07/26
+// 2026/07/26 16：20
 
 // OTA启动任务 - 在 MQTT 连接后检查 OTA
 static void ota_start_task(void *param)
